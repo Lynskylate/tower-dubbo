@@ -1,25 +1,20 @@
 // document: https://dubbo.apache.org/zh-cn/blog/2018/10/05/dubbo-%E5%8D%8F%E8%AE%AE%E8%AF%A6%E8%A7%A3/#codec%E7%9A%84%E5%AE%9A%E4%B9%89
-use crate::error::CodecError;
 use crate::constant::{DEFAULT_HEAD_SIZE, DEFAULT_MAX_MESSAGE_SIZE};
+use crate::error::CodecError;
 
 use std::any::Any;
 use std::collections::HashMap;
 
+use bytes::{Buf, BytesMut};
 use tokio_util::codec::{self, Decoder, Encoder};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
-use bytes::{BytesMut, Buf};
 
-
-
-pub trait Serializer {
-}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MessageType {
     Response = 0x0,
     Request = 0x1,
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
@@ -29,7 +24,6 @@ pub enum SerializationType {
     MsgPack = 4,
     Protobuf = 21,
 }
-
 
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
@@ -46,7 +40,6 @@ pub enum MessageStatus {
     ServerThreadPoolExhastedError = 100,
     Unknow(u8),
 }
-
 
 #[derive(Debug, Clone, Copy)]
 pub struct DubboHeader {
@@ -117,9 +110,6 @@ pub struct DubboCodec {
     state: DecodeState,
 }
 
-
-
-
 #[derive(Debug, Clone, Copy)]
 enum DecodeState {
     Head,
@@ -130,22 +120,22 @@ impl DubboMessage {
     pub fn new(header: DubboHeader) -> Self {
         DubboMessage { header, body: None }
     }
-
 }
 
 //
 impl DubboCodec {
-    pub fn new()->Self {
-        DubboCodec { state: DecodeState::Head  }
+    pub fn new() -> Self {
+        DubboCodec {
+            state: DecodeState::Head,
+        }
     }
 
     fn decode_header(&mut self, src: &mut BytesMut) -> Result<Option<DubboHeader>, CodecError> {
         if src.len() < DEFAULT_HEAD_SIZE {
-            return Ok(None)
+            return Ok(None);
         }
 
         let mut protocol_header = src.split_to(DEFAULT_HEAD_SIZE);
-
 
         if protocol_header.get_u16() != 0xdabb {
             return Err(CodecError::InvalidMagicCode);
@@ -172,7 +162,7 @@ impl DubboCodec {
             _ => false,
         };
 
-        header.serialization_type = match meta_value & 0x1f{
+        header.serialization_type = match meta_value & 0x1f {
             2 => SerializationType::Hessian2,
             4 => SerializationType::MsgPack,
             21 => SerializationType::Protobuf,
@@ -199,15 +189,19 @@ impl DubboCodec {
         header.data_length = protocol_header.get_u32() as usize;
         // Because java use int to represent the length of the message, so the max length of the message is 2^31 - 1
         if header.data_length > DEFAULT_MAX_MESSAGE_SIZE {
-            return Err(CodecError::InvalidDataLength(header.data_length))
+            return Err(CodecError::InvalidDataLength(header.data_length));
         }
 
         Ok(Some(header))
     }
 
-    fn decode_data(&mut self, header: DubboHeader, src: &mut BytesMut) -> Result<Option<DubboMessage>, CodecError> {
+    fn decode_data(
+        &mut self,
+        header: DubboHeader,
+        src: &mut BytesMut,
+    ) -> Result<Option<DubboMessage>, CodecError> {
         if src.len() < header.data_length as usize {
-            return Ok(None)
+            return Ok(None);
         }
 
         let data = src.split_to(header.data_length);
@@ -215,7 +209,6 @@ impl DubboCodec {
         // ser/deser impl decode the data
         Ok(Some(DubboMessage::new(header)))
     }
-
 
     fn encode_body(&mut self, item: DubboMessage) -> Result<(), CodecError> {
         Ok(())
@@ -227,7 +220,6 @@ impl DubboCodec {
 }
 
 impl Decoder for DubboCodec {
-
     type Item = DubboMessage;
     type Error = CodecError;
 
@@ -255,24 +247,17 @@ impl Decoder for DubboCodec {
             }
             None => Ok(None),
         }
-
     }
-
 }
 
 impl Encoder<DubboMessage> for DubboCodec {
     type Error = CodecError;
 
-
-
     fn encode(&mut self, item: DubboMessage, dst: &mut BytesMut) -> Result<(), Self::Error> {
         // ser/deser impl encode the data
         Ok(())
     }
-
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -306,7 +291,6 @@ mod tests {
     #[test]
     fn test_dubbo_request_header_with_invalid_datalength() {
         use bytes::{BufMut, BytesMut};
-        use crate::error::CodecError;
 
         let mut buf = vec![];
         buf.put_u16(0xdabb);
@@ -322,5 +306,4 @@ mod tests {
         let err = codec.decode_header(&mut bytes);
         assert_eq!(err.is_err(), true);
     }
-
 }

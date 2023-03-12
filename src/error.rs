@@ -1,5 +1,5 @@
-use std::fmt;
 use std::error;
+use std::fmt;
 
 #[derive(Debug)]
 pub enum CodecError {
@@ -20,7 +20,9 @@ impl fmt::Display for CodecError {
         match self {
             CodecError::InvalidMagicCode => write!(f, "Invalid Magic Codec"),
             CodecError::InvalidDataLength(size) => write!(f, "Invalid DataSize {}", size),
-            CodecError::InvalidSerializationType(v) => write!(f, "Invalid Serialization Type {}", v),
+            CodecError::InvalidSerializationType(v) => {
+                write!(f, "Invalid Serialization Type {}", v)
+            }
             CodecError::IoError(err) => write!(f, "IoError {}", err),
         }
     }
