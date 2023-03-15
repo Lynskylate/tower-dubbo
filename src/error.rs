@@ -1,6 +1,6 @@
+use hessian_rs::Error as HessianError;
 use std::error;
 use std::fmt;
-use hessian_rs::Error as HessianError;
 
 #[derive(Debug)]
 pub enum CodecError {

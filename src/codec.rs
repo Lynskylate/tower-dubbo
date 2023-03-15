@@ -5,11 +5,11 @@ use crate::error::CodecError;
 use std::any::Any;
 use std::collections::HashMap;
 
-use bytes::{Buf, BytesMut, Bytes, BufMut};
-use hessian_rs::value::{ToHessian, List, Map as HessianMap, Value};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
+use derive_builder::Builder;
+use hessian_rs::value::{List, Map as HessianMap, ToHessian, Value};
 use tokio_util::codec::{self, Decoder, Encoder};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
-
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MessageType {
@@ -40,15 +40,14 @@ pub enum MessageStatus {
     ServerThreadPoolExhastedError = 100,
 
     // According to "java dubbo" There are two cases of response:
-	// 		1. with attachments
-	// 		2. no attachments
-	ResponseWithException                   = 0,
-	ResponseValue                            = 1,
-	ResponseNullValue                       = 2,
-	ResponseWithExceptionWithAttachments  = 3,
-	ResponseValueWithAttachments           = 4,
-	ResponseNullValueWithAttachments      = 5,
-
+    // 		1. with attachments
+    // 		2. no attachments
+    ResponseWithException = 0,
+    ResponseValue = 1,
+    ResponseNullValue = 2,
+    ResponseWithExceptionWithAttachments = 3,
+    ResponseValueWithAttachments = 4,
+    ResponseNullValueWithAttachments = 5,
 
     Unknow = 0xff,
 }
@@ -99,7 +98,7 @@ pub struct DubboMessage {
     pub body: Option<DubboBody>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Builder)]
 pub struct RequestInfo {
     version: String,
     service_name: String,
@@ -124,18 +123,15 @@ pub struct DubboCodec {
     state: DecodeState,
 }
 
-
 pub trait Serializer {
     fn serialize_request(&self, value: &DubboMessage) -> Result<Bytes, CodecError>;
     fn serialize_response(&self, value: &DubboMessage) -> Result<Bytes, CodecError>;
 }
 
-
 pub trait Deserializer {
     fn deserialize_request(&self, value: BytesMut) -> Result<RequestInfo, CodecError>;
     fn deserialize_response(&self, value: BytesMut) -> Result<ResponseInfo, CodecError>;
 }
-
 
 impl From<SerializationType> for Box<dyn Serializer> {
     fn from(value: SerializationType) -> Self {
@@ -166,7 +162,9 @@ impl Serializer for Hessian2Serializer {
         let value = match message.body {
             Some(DubboBody::Request(ref value)) => value,
             _ => {
-                return Err(CodecError::SerializeError("request body is empty".to_string()));
+                return Err(CodecError::SerializeError(
+                    "request body is empty".to_string(),
+                ));
             }
         };
 
@@ -178,8 +176,14 @@ impl Serializer for Hessian2Serializer {
         ser.serialize_value(&value.service_name.clone().to_hessian())?;
         ser.serialize_value(&value.service_version.clone().to_hessian())?;
         ser.serialize_value(&value.method_name.clone().to_hessian())?;
-        let parameter_type_list: Vec<Value> = value.method_paramter_type.clone().into_iter().map(|k|k.to_hessian()).collect();
-        ser.serialize_value(&Value::List(List::from(parameter_type_list)))?;
+        let parameter_type_list = value
+            .method_paramter_type
+            .clone()
+            .into_iter()
+            .map(|k| format!("L{}", k.replace(".", "/")))
+            .collect::<Vec<_>>()
+            .join(";");
+        ser.serialize_value(&parameter_type_list.to_hessian())?;
         ser.serialize_value(&Value::List(List::from(value.method_arguments.clone())))?;
         ser.serialize_value(&value.attachments.clone().to_hessian())?;
 
@@ -191,28 +195,36 @@ impl Serializer for Hessian2Serializer {
         let mut vec = Vec::new();
         let mut ser = hessian_rs::ser::Serializer::new(&mut vec);
         // return heartbeat with null
-        if message.header.status == MessageStatus::Ok && message.header.event{
+        if message.header.status == MessageStatus::Ok && message.header.event {
             ser.serialize_value(&Value::Null)?;
-            return Ok(Bytes::from(vec))
+            return Ok(Bytes::from(vec));
         }
 
         let value = match message.body {
             Some(DubboBody::Response(ref value)) => value,
             _ => {
-                return Err(CodecError::SerializeError("response body is empty".to_string()));
+                return Err(CodecError::SerializeError(
+                    "response body is empty".to_string(),
+                ));
             }
         };
 
         if let Some(ref e) = value.exception {
-            ser.serialize_value(&(MessageStatus::ResponseWithExceptionWithAttachments as i32).to_hessian())?;
+            ser.serialize_value(
+                &(MessageStatus::ResponseWithExceptionWithAttachments as i32).to_hessian(),
+            )?;
             ser.serialize_value(&e.to_string().to_hessian())?;
             ser.serialize_value(&value.attachments.clone().to_hessian())?;
         } else {
             if value.result == None {
-                ser.serialize_value(&(MessageStatus::ResponseNullValueWithAttachments as i32).to_hessian())?;
+                ser.serialize_value(
+                    &(MessageStatus::ResponseNullValueWithAttachments as i32).to_hessian(),
+                )?;
                 ser.serialize_value(&Value::Null)?;
             } else {
-                ser.serialize_value(&(MessageStatus::ResponseValueWithAttachments as i32).to_hessian())?;
+                ser.serialize_value(
+                    &(MessageStatus::ResponseValueWithAttachments as i32).to_hessian(),
+                )?;
                 ser.serialize_value(&value.result.clone().unwrap())?;
             }
 
@@ -221,8 +233,6 @@ impl Serializer for Hessian2Serializer {
 
         Ok(Bytes::from(vec))
     }
-
-
 }
 
 impl Deserializer for Hessian2Serializer {
@@ -231,35 +241,48 @@ impl Deserializer for Hessian2Serializer {
         let dubbo_version = match de.read_value()? {
             Value::String(dubbo_version) => dubbo_version,
             _ => {
-                return Err(CodecError::SerializeError("dubbo version is not string".to_string()));
+                return Err(CodecError::SerializeError(
+                    "dubbo version is not string".to_string(),
+                ));
             }
         };
         let dubbo_service_name = match de.read_value()? {
             Value::String(dubbo_service_name) => dubbo_service_name,
             _ => {
-                return Err(CodecError::SerializeError("dubbo service name is not string".to_string()));
+                return Err(CodecError::SerializeError(
+                    "dubbo service name is not string".to_string(),
+                ));
             }
         };
         let service_version = match de.read_value()? {
             Value::String(service_version) => service_version,
             _ => {
-                return Err(CodecError::SerializeError("dubbo service version is not string".to_string()));
+                return Err(CodecError::SerializeError(
+                    "dubbo service version is not string".to_string(),
+                ));
             }
         };
         let method_name = match de.read_value()? {
             Value::String(method_name) => method_name,
             _ => {
-                return Err(CodecError::SerializeError("dubbo method name is not string".to_string()));
+                return Err(CodecError::SerializeError(
+                    "dubbo method name is not string".to_string(),
+                ));
             }
         };
         let parameter_type = match de.read_value()? {
             Value::String(parameter_type) => parameter_type,
             _ => {
-                return Err(CodecError::SerializeError("dubbo method parameter types is not string".to_string()));
+                return Err(CodecError::SerializeError(
+                    "dubbo method parameter types is not string".to_string(),
+                ));
             }
         };
 
-        let method_parameter_types: Vec<_> = parameter_type.split(';').filter(|&x| !x.is_empty()).collect();
+        let method_parameter_types: Vec<_> = parameter_type
+            .split(';')
+            .filter(|&x| !x.is_empty())
+            .collect();
 
         let mut parameters = vec![];
         for _ in 0..method_parameter_types.len() {
@@ -272,7 +295,10 @@ impl Deserializer for Hessian2Serializer {
             attachments.value().into_iter().for_each(|(k, v)| {
                 // ignore non-string key and value
                 if k.is_str() && v.is_str() {
-                    request_attachments.insert(k.as_str().unwrap().to_string(), v.as_str().unwrap().to_string());
+                    request_attachments.insert(
+                        k.as_str().unwrap().to_string(),
+                        v.as_str().unwrap().to_string(),
+                    );
                 }
             });
             return Ok(RequestInfo {
@@ -280,20 +306,26 @@ impl Deserializer for Hessian2Serializer {
                 service_name: dubbo_service_name,
                 service_version: service_version,
                 method_name: method_name,
-                method_paramter_type: method_parameter_types.into_iter().map(|v|v.to_string()).collect(),
+                method_paramter_type: method_parameter_types
+                    .into_iter()
+                    .map(|v| v.to_string())
+                    .collect(),
                 method_arguments: parameters,
                 attachments: request_attachments,
-            })
+            });
         } else {
             return Ok(RequestInfo {
                 version: dubbo_version,
                 service_name: dubbo_service_name,
                 service_version: service_version,
                 method_name: method_name,
-                method_paramter_type: method_parameter_types.into_iter().map(|v|v.to_string()).collect(),
+                method_paramter_type: method_parameter_types
+                    .into_iter()
+                    .map(|v| v.to_string())
+                    .collect(),
                 method_arguments: parameters,
                 attachments: HashMap::new(),
-            })
+            });
         }
     }
 
@@ -314,36 +346,41 @@ impl DubboMessage {
     }
 
     pub fn with_request(header: DubboHeader, body: RequestInfo) -> Self {
-        DubboMessage { header, body: Some(DubboBody::Request(body)) }
+        DubboMessage {
+            header,
+            body: Some(DubboBody::Request(body)),
+        }
     }
 
     pub fn with_response(header: DubboHeader, body: ResponseInfo) -> Self {
-        DubboMessage { header, body: Some(DubboBody::Response(body)) }
-    }
-
-    pub fn into_request(self)->Option<RequestInfo>{
-        match self.body{
-            Some(DubboBody::Request(body))=>Some(body),
-            _=>None
+        DubboMessage {
+            header,
+            body: Some(DubboBody::Response(body)),
         }
     }
 
-    pub fn into_response(self)->Option<ResponseInfo>{
-        match self.body{
-            Some(DubboBody::Response(body))=>Some(body),
-            _=>None
+    pub fn into_request(self) -> Option<RequestInfo> {
+        match self.body {
+            Some(DubboBody::Request(body)) => Some(body),
+            _ => None,
         }
     }
 
-    pub fn id(&self)->u64{
+    pub fn into_response(self) -> Option<ResponseInfo> {
+        match self.body {
+            Some(DubboBody::Response(body)) => Some(body),
+            _ => None,
+        }
+    }
+
+    pub fn id(&self) -> u64 {
         self.header.id
     }
 
-    pub fn set_id(&mut self, id: u64){
+    pub fn set_id(&mut self, id: u64) {
         self.header.id = id
     }
 }
-
 
 //
 impl DubboCodec {
@@ -428,7 +465,7 @@ impl DubboCodec {
         }
 
         let data = src.split_to(header.data_length);
-        let de: Box<dyn Deserializer>= From::from(header.serialization_type);
+        let de: Box<dyn Deserializer> = From::from(header.serialization_type);
         if header.msg_type == MessageType::Request {
             let request_info = de.deserialize_request(data)?;
             Ok(Some(DubboMessage::with_request(header, request_info)))
@@ -441,17 +478,17 @@ impl DubboCodec {
     fn encode_body(&mut self, item: &DubboMessage) -> Result<Bytes, CodecError> {
         let ser: Box<dyn Serializer> = From::from(item.header.serialization_type);
         match item.body {
-            Some(DubboBody::Request(ref req)) => {
-                Ok(ser.serialize_request(item)?)
-            }
-            Some(DubboBody::Response(ref resp)) => {
-                Ok(ser.serialize_response(item)?)
-            }
+            Some(DubboBody::Request(ref req)) => Ok(ser.serialize_request(item)?),
+            Some(DubboBody::Response(ref resp)) => Ok(ser.serialize_response(item)?),
             None => Err(CodecError::InvalidBody),
         }
     }
 
-    fn encode_header(&mut self, header: &DubboHeader, buf: &mut BytesMut) -> Result<(), CodecError> {
+    fn encode_header(
+        &mut self,
+        header: &DubboHeader,
+        buf: &mut BytesMut,
+    ) -> Result<(), CodecError> {
         buf.put_u16(DUBBO_MAGIC_CODE);
         let mut meta_value = 0;
         if header.msg_type == MessageType::Request {
@@ -604,6 +641,9 @@ mod tests {
         println!("{:?}", res);
 
         let dubbo_request = res.into_request().unwrap();
-        assert_eq!(dubbo_request.service_name, "org.apache.dubbo.sample.UserProvider");
+        assert_eq!(
+            dubbo_request.service_name,
+            "org.apache.dubbo.sample.UserProvider"
+        );
     }
 }
