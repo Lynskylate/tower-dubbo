@@ -12,6 +12,7 @@ use tokio::net::{TcpListener, TcpStream};
 pub mod codec;
 pub mod constant;
 pub mod error;
+pub mod transport;
 
 use tokio_util::codec::{Decoder, Framed, FramedRead, FramedWrite};
 

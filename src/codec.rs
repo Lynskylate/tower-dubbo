@@ -116,7 +116,7 @@ pub struct ResponseInfo {
     // todo: the object should implement the trait like Into<Common Object>, From<Common Object>
     // the common Object may be protobuf struct or like serde::Serialize and serde::Deserialize
     result: Option<Value>,
-    exception: Option<Box<dyn std::error::Error>>,
+    exception: Option<Box<dyn std::error::Error + Send>>,
     attachments: HashMap<String, String>,
 }
 
@@ -326,6 +326,21 @@ impl DubboMessage {
             Some(DubboBody::Request(body))=>Some(body),
             _=>None
         }
+    }
+
+    pub fn into_response(self)->Option<ResponseInfo>{
+        match self.body{
+            Some(DubboBody::Response(body))=>Some(body),
+            _=>None
+        }
+    }
+
+    pub fn id(&self)->u64{
+        self.header.id
+    }
+
+    pub fn set_id(&mut self, id: u64){
+        self.header.id = id
     }
 }
 
