@@ -1,11 +1,11 @@
 // document: https://dubbo.apache.org/zh-cn/blog/2018/10/05/dubbo-%E5%8D%8F%E8%AE%AE%E8%AF%A6%E8%A7%A3/#codec%E7%9A%84%E5%AE%9A%E4%B9%89
-use crate::constant::{DEFAULT_HEAD_SIZE, DEFAULT_MAX_MESSAGE_SIZE};
+use crate::constant::{DEFAULT_HEAD_SIZE, DEFAULT_MAX_MESSAGE_SIZE, DUBBO_MAGIC_CODE};
 use crate::error::CodecError;
 
 use std::any::Any;
 use std::collections::HashMap;
 
-use bytes::{Buf, BytesMut, Bytes};
+use bytes::{Buf, BytesMut, Bytes, BufMut};
 use hessian_rs::value::{ToHessian, List, Map as HessianMap, Value};
 use tokio_util::codec::{self, Decoder, Encoder};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
@@ -423,11 +423,37 @@ impl DubboCodec {
         }
     }
 
-    fn encode_body(&mut self, item: DubboMessage, dst: &mut BytesMut) -> Result<(), CodecError> {
-        Ok(())
+    fn encode_body(&mut self, item: &DubboMessage) -> Result<Bytes, CodecError> {
+        let ser: Box<dyn Serializer> = From::from(item.header.serialization_type);
+        match item.body {
+            Some(DubboBody::Request(ref req)) => {
+                Ok(ser.serialize_request(item)?)
+            }
+            Some(DubboBody::Response(ref resp)) => {
+                Ok(ser.serialize_response(item)?)
+            }
+            None => Err(CodecError::InvalidBody),
+        }
     }
 
-    fn encode_header(&mut self, item: DubboMessage) -> Result<(), CodecError> {
+    fn encode_header(&mut self, header: &DubboHeader, buf: &mut BytesMut) -> Result<(), CodecError> {
+        buf.put_u16(DUBBO_MAGIC_CODE);
+        let mut meta_value = 0;
+        if header.msg_type == MessageType::Request {
+            meta_value |= 0x80;
+        }
+        if header.two_way {
+            meta_value |= 0x40;
+        }
+        if header.event {
+            meta_value |= 0x20;
+        }
+        meta_value |= header.serialization_type as u8;
+        buf.put_u8(meta_value);
+        buf.put_u8(header.status as u8);
+        buf.put_u64(header.id);
+        assert!(header.data_length <= DEFAULT_MAX_MESSAGE_SIZE);
+        buf.put_u32(header.data_length as u32);
         Ok(())
     }
 }
@@ -468,6 +494,11 @@ impl Encoder<DubboMessage> for DubboCodec {
 
     fn encode(&mut self, item: DubboMessage, dst: &mut BytesMut) -> Result<(), Self::Error> {
         // ser/deser impl encode the data
+        let payload = self.encode_body(&item)?;
+        let mut header = item.header;
+        header.data_length = payload.len();
+        self.encode_header(&header, dst)?;
+        dst.extend(payload);
         Ok(())
     }
 }
