@@ -176,15 +176,17 @@ impl Serializer for Hessian2Serializer {
         ser.serialize_value(&value.service_name.clone().to_hessian())?;
         ser.serialize_value(&value.service_version.clone().to_hessian())?;
         ser.serialize_value(&value.method_name.clone().to_hessian())?;
-        let parameter_type_list = value
+        let parameter_type_list = format!("{};", value
             .method_paramter_type
             .clone()
             .into_iter()
             .map(|k| format!("L{}", k.replace(".", "/")))
             .collect::<Vec<_>>()
-            .join(";");
+            .join(";"));
         ser.serialize_value(&parameter_type_list.to_hessian())?;
-        ser.serialize_value(&Value::List(List::from(value.method_arguments.clone())))?;
+        for arg in value.method_arguments.iter() {
+            ser.serialize_value(&arg)?;
+        }
         ser.serialize_value(&value.attachments.clone().to_hessian())?;
 
         Ok(Bytes::from(vec))
@@ -282,6 +284,11 @@ impl Deserializer for Hessian2Serializer {
         let method_parameter_types: Vec<_> = parameter_type
             .split(';')
             .filter(|&x| !x.is_empty())
+            .map(|x| {
+                let mut s = String::from(x);
+                s.remove(0);
+                s.replace("/", ".")
+            })
             .collect();
 
         let mut parameters = vec![];
@@ -330,6 +337,7 @@ impl Deserializer for Hessian2Serializer {
     }
 
     fn deserialize_response(&self, value: BytesMut) -> Result<ResponseInfo, CodecError> {
+        println!("deserialize_response: {:?}", value);
         todo!()
     }
 }
@@ -559,7 +567,8 @@ impl Encoder<DubboMessage> for DubboCodec {
 mod tests {
     use crate::codec::{DubboCodec, MessageType};
     use bytes::{BufMut, BytesMut};
-    use tokio_util::codec::Decoder;
+    use tokio_util::codec::{Decoder, Encoder};
+    use super::*;
     #[test]
     fn test_dubbo_request_header_decode() {
         use bytes::{BufMut, BytesMut};
@@ -645,5 +654,67 @@ mod tests {
             dubbo_request.service_name,
             "org.apache.dubbo.sample.UserProvider"
         );
+    }
+
+    #[test]
+    fn test_codec_request_roundtrip() {
+        let mut codec = DubboCodec::new();
+
+        let header = DubboHeader::default();
+        let map = {
+            let mut gender: HashMap<Value, Value> = HashMap::new();
+            gender.insert("name".to_hessian(), "MAN".to_hessian());
+
+            let mut map = HashMap::new();
+            map.insert(
+                "sex".to_hessian(),
+                Value::Map(("org.apache.dubbo.sample.Gender", gender).into()),
+            );
+            map.insert("name".to_hessian(), "".to_hessian());
+            map.insert("id".to_hessian(), "003".to_hessian());
+            map.insert("time".to_hessian(), Value::Null);
+            map.insert("age".to_hessian(), 0.to_hessian());
+            map
+        };
+
+        let attachments = {
+            let mut attachments = HashMap::new();
+            attachments.insert("path".into(), "org.apache.dubbo.sample.UserProvider".into());
+            attachments.insert(
+                "interface".into(),
+                "org.apache.dubbo.sample.UserProvider".into(),
+            );
+            attachments.insert("enviroment".into(), "dev".into());
+            attachments.insert("timeout".into(), "0".into());
+            attachments.insert("version".into(), "".into());
+            attachments
+        };
+
+        let body = RequestInfoBuilder::default()
+            .service_name("org.apache.dubbo.sample.UserProvider".into())
+            .method_name("GetUser".into())
+            .version("1.0.2".into())
+            .service_version("".into())
+            .method_paramter_type(vec!["org.apache.dubbo.sample.User".into()])
+            .method_arguments(vec![Value::Map(
+                ("org.apache.dubbo.sample.User", map).into(),
+            )])
+            .attachments(attachments)
+            .build()
+            .unwrap();
+
+        // encode and decode
+        let req = DubboMessage::with_request(header, body);
+        let mut dst = BytesMut::new();
+        codec.encode(req, &mut dst).unwrap();
+        let codec_res =  codec.decode(&mut dst).unwrap().unwrap();
+        let dubbo_request = codec_res.into_request().unwrap();
+
+        assert_eq!(dubbo_request.service_name, "org.apache.dubbo.sample.UserProvider");
+        assert_eq!(dubbo_request.method_name, "GetUser");
+        assert_eq!(dubbo_request.version, "1.0.2");
+        assert_eq!(dubbo_request.service_version, "");
+        assert_eq!(dubbo_request.method_paramter_type, vec![String::from("org.apache.dubbo.sample.User")]);
+
     }
 }

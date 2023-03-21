@@ -127,36 +127,38 @@ mod tests {
 
     use super::*;
     use hessian_rs::{value::ToHessian, Value};
-    #[tokio::test]
-    async fn test_client() {
-        let addr = "127.0.0.1:46515".parse().unwrap();
-        let conn = TcpConnection::new(addr);
-        let mut client = MakeClient::with_connection(conn)
-            .into_client()
-            .await
-            .unwrap();
-        let header = DubboHeader::default();
-        let mut map = HashMap::new();
-        let mut gender: HashMap<Value, Value> = HashMap::new();
-        gender.insert("name".to_hessian(), "MAN".to_hessian());
-        map.insert(
-            "sex".to_hessian(),
-            Value::Map(("org.apache.dubbo.sample.Gender", gender).into()),
-        );
-        map.insert("name".to_hessian(), "".to_hessian());
-        map.insert("id".to_hessian(), "003".to_hessian());
-        map.insert("time".to_hessian(), Value::Null);
-        map.insert("age".to_hessian(), 0.to_hessian());
+    use tower::ServiceExt;
 
-        let mut attachments = HashMap::new();
-        attachments.insert("path".into(), "org.apache.dubbo.sample.UserProvider".into());
-        attachments.insert(
-            "interface".into(),
-            "org.apache.dubbo.sample.UserProvider".into(),
-        );
-        attachments.insert("enviroment".into(), "dev".into());
-        attachments.insert("timeout".into(), "0".into());
-        attachments.insert("version".into(), "".into());
+    fn build_req() -> DubboMessage {
+        let header = DubboHeader::default();
+        let map = {
+            let mut gender: HashMap<Value, Value> = HashMap::new();
+            gender.insert("name".to_hessian(), "MAN".to_hessian());
+
+            let mut map = HashMap::new();
+            map.insert(
+                "sex".to_hessian(),
+                Value::Map(("org.apache.dubbo.sample.Gender", gender).into()),
+            );
+            map.insert("name".to_hessian(), "".to_hessian());
+            map.insert("id".to_hessian(), "003".to_hessian());
+            map.insert("time".to_hessian(), Value::Null);
+            map.insert("age".to_hessian(), 0.to_hessian());
+            map
+        };
+
+        let attachments = {
+            let mut attachments = HashMap::new();
+            attachments.insert("path".into(), "org.apache.dubbo.sample.UserProvider".into());
+            attachments.insert(
+                "interface".into(),
+                "org.apache.dubbo.sample.UserProvider".into(),
+            );
+            attachments.insert("enviroment".into(), "dev".into());
+            attachments.insert("timeout".into(), "0".into());
+            attachments.insert("version".into(), "".into());
+            attachments
+        };
 
         let body = RequestInfoBuilder::default()
             .service_name("org.apache.dubbo.sample.UserProvider".into())
@@ -171,8 +173,20 @@ mod tests {
             .build()
             .unwrap();
 
+        DubboMessage::with_request(header, body)
+    }
+    #[tokio::test]
+    async fn test_client() {
+        let addr = "127.0.0.1:20000".parse().unwrap();
+        let conn = TcpConnection::new(addr);
+        let mut client = MakeClient::with_connection(conn)
+            .into_client()
+            .await
+            .unwrap();
+
+        client.ready().await.unwrap();
         let resp = client
-            .call(DubboMessage::with_request(header, body))
+            .call(build_req())
             .await
             .unwrap();
         println!("{:?}", resp);
