@@ -1,21 +1,28 @@
-use crate::codec::DubboHeader;
-use crate::codec::{DubboCodec, DubboMessage, RequestInfoBuilder};
-use crate::conn::{MakeConnection, TcpConnection};
+use crate::codec::{DubboCodec, DubboMessage};
+use crate::conn::MakeConnection;
 use std::collections::HashSet;
 use std::pin::Pin;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use tokio_tower::Error;
 use tokio_util::codec::Framed;
-use tower::Service;
 
 use tokio_tower::multiplex::client::VecDequePendingStore;
 use tokio_tower::multiplex::{Client, MultiplexTransport, TagStore};
 
-#[derive(Default)]
+#[derive(Debug)]
 pub struct CorrelationStore {
     correlation_ids: HashSet<u64>,
     id_gen: AtomicU64,
+}
+
+impl Default for CorrelationStore {
+    fn default() -> Self {
+        Self {
+            correlation_ids: HashSet::new(),
+            id_gen: AtomicU64::new(1),
+        }
+    }
 }
 
 impl TagStore<DubboMessage, DubboMessage> for CorrelationStore {
@@ -68,12 +75,16 @@ where
     }
 }
 
+#[cfg(test)]
 mod tests {
 
     use std::collections::HashMap;
 
     use super::*;
+    use crate::codec::{DubboHeader, RequestInfoBuilder};
+    use crate::conn::TcpConnection;
     use hessian_rs::{value::ToHessian, Value};
+    use tower::Service;
     use tower::ServiceExt;
 
     fn build_req() -> DubboMessage {

@@ -2,14 +2,12 @@
 use crate::constant::{DEFAULT_HEAD_SIZE, DEFAULT_MAX_MESSAGE_SIZE, DUBBO_MAGIC_CODE};
 use crate::error::CodecError;
 
-use std::any::Any;
 use std::collections::HashMap;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use derive_builder::Builder;
-use hessian_rs::value::{List, Map as HessianMap, ToHessian, Value};
-use tokio_util::codec::{self, Decoder, Encoder};
-use tokio_util::codec::{Framed, LengthDelimitedCodec};
+use hessian_rs::value::{ToHessian, Value};
+use tokio_util::codec::{Decoder, Encoder};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MessageType {
@@ -110,6 +108,23 @@ pub struct RequestInfo {
     attachments: HashMap<String, String>,
 }
 
+impl From<RequestInfo> for DubboMessage {
+    fn from(value: RequestInfo) -> Self {
+        DubboMessage {
+            header: DubboHeader {
+                msg_type: MessageType::Request,
+                two_way: true,
+                event: false,
+                serialization_type: SerializationType::Hessian2,
+                status: MessageStatus::Ok,
+                id: 0,
+                data_length: 0,
+            },
+            body: Some(DubboBody::Request(value)),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ResponseInfo {
     // todo: the object should implement the trait like Into<Common Object>, From<Common Object>
@@ -117,6 +132,23 @@ pub struct ResponseInfo {
     result: Option<Value>,
     exception: Option<Box<dyn std::error::Error + Send>>,
     attachments: HashMap<String, String>,
+}
+
+impl From<ResponseInfo> for DubboMessage {
+    fn from(value: ResponseInfo) -> Self {
+        DubboMessage {
+            header: DubboHeader {
+                msg_type: MessageType::Response,
+                two_way: true,
+                event: false,
+                serialization_type: SerializationType::Hessian2,
+                status: MessageStatus::Ok,
+                id: 0,
+                data_length: 0,
+            },
+            body: Some(DubboBody::Response(value)),
+        }
+    }
 }
 
 pub struct DubboCodec {
@@ -182,13 +214,13 @@ impl Serializer for Hessian2Serializer {
                 .method_paramter_type
                 .clone()
                 .into_iter()
-                .map(|k| format!("L{}", k.replace(".", "/")))
+                .map(|k| format!("L{}", k.replace('.', "/")))
                 .collect::<Vec<_>>()
                 .join(";")
         );
         ser.serialize_value(&parameter_type_list.to_hessian())?;
         for arg in value.method_arguments.iter() {
-            ser.serialize_value(&arg)?;
+            ser.serialize_value(arg)?;
         }
         ser.serialize_value(&value.attachments.clone().to_hessian())?;
 
@@ -221,7 +253,7 @@ impl Serializer for Hessian2Serializer {
             ser.serialize_value(&e.to_string().to_hessian())?;
             ser.serialize_value(&value.attachments.clone().to_hessian())?;
         } else {
-            if value.result == None {
+            if value.result.is_none() {
                 ser.serialize_value(
                     &(MessageStatus::ResponseNullValueWithAttachments as i32).to_hessian(),
                 )?;
@@ -290,7 +322,7 @@ impl Deserializer for Hessian2Serializer {
             .map(|x| {
                 let mut s = String::from(x);
                 s.remove(0);
-                s.replace("/", ".")
+                s.replace('/', ".")
             })
             .collect();
 
@@ -302,7 +334,7 @@ impl Deserializer for Hessian2Serializer {
 
         if let Value::Map(attachments) = de.read_value()? {
             let mut request_attachments = HashMap::with_capacity(attachments.len());
-            attachments.value().into_iter().for_each(|(k, v)| {
+            attachments.value().iter().for_each(|(k, v)| {
                 // ignore non-string key and value
                 if k.is_str() && v.is_str() {
                     request_attachments.insert(
@@ -311,31 +343,25 @@ impl Deserializer for Hessian2Serializer {
                     );
                 }
             });
-            return Ok(RequestInfo {
+            Ok(RequestInfo {
                 version: dubbo_version,
                 service_name: dubbo_service_name,
-                service_version: service_version,
-                method_name: method_name,
-                method_paramter_type: method_parameter_types
-                    .into_iter()
-                    .map(|v| v.to_string())
-                    .collect(),
+                service_version,
+                method_name,
+                method_paramter_type: method_parameter_types.into_iter().collect(),
                 method_arguments: parameters,
                 attachments: request_attachments,
-            });
+            })
         } else {
-            return Ok(RequestInfo {
+            Ok(RequestInfo {
                 version: dubbo_version,
                 service_name: dubbo_service_name,
-                service_version: service_version,
-                method_name: method_name,
-                method_paramter_type: method_parameter_types
-                    .into_iter()
-                    .map(|v| v.to_string())
-                    .collect(),
+                service_version,
+                method_name,
+                method_paramter_type: method_parameter_types.into_iter().collect(),
                 method_arguments: parameters,
                 attachments: HashMap::new(),
-            });
+            })
         }
     }
 
@@ -391,9 +417,16 @@ impl DubboMessage {
     pub fn set_id(&mut self, id: u64) {
         self.header.id = id
     }
+
+    pub fn serialize_type(&self) -> SerializationType {
+        self.header.serialization_type
+    }
+
+    pub fn set_serialize_type(&mut self, serialize_type: SerializationType) {
+        self.header.serialization_type = serialize_type
+    }
 }
 
-//
 impl DubboCodec {
     pub fn new() -> Self {
         DubboCodec {
@@ -423,15 +456,8 @@ impl DubboCodec {
             _ => MessageType::Response,
         };
 
-        header.two_way = match meta_value & 0x40 {
-            0x40 => true,
-            _ => false,
-        };
-
-        header.event = match meta_value & 0x20 {
-            0x20 => true,
-            _ => false,
-        };
+        header.two_way = matches!(meta_value & 0x40, 0x40);
+        header.event = matches!(meta_value & 0x20, 0x20);
 
         header.serialization_type = match meta_value & 0x1f {
             2 => SerializationType::Hessian2,
@@ -452,7 +478,7 @@ impl DubboCodec {
             90 => MessageStatus::ClientError,
             100 => MessageStatus::ServerThreadPoolExhastedError,
             // Maybe should return error if it's a response, but for now, just return unknow
-            v => MessageStatus::Unknow,
+            _v => MessageStatus::Unknow,
         };
 
         header.id = protocol_header.get_u64();
@@ -471,7 +497,7 @@ impl DubboCodec {
         header: DubboHeader,
         src: &mut BytesMut,
     ) -> Result<Option<DubboMessage>, CodecError> {
-        if src.len() < header.data_length as usize {
+        if src.len() < header.data_length {
             return Ok(None);
         }
 
@@ -489,8 +515,8 @@ impl DubboCodec {
     fn encode_body(&mut self, item: &DubboMessage) -> Result<Bytes, CodecError> {
         let ser: Box<dyn Serializer> = From::from(item.header.serialization_type);
         match item.body {
-            Some(DubboBody::Request(ref req)) => Ok(ser.serialize_request(item)?),
-            Some(DubboBody::Response(ref resp)) => Ok(ser.serialize_response(item)?),
+            Some(DubboBody::Request(ref _req)) => Ok(ser.serialize_request(item)?),
+            Some(DubboBody::Response(ref _resp)) => Ok(ser.serialize_response(item)?),
             None => Err(CodecError::InvalidBody),
         }
     }
@@ -518,6 +544,14 @@ impl DubboCodec {
         assert!(header.data_length <= DEFAULT_MAX_MESSAGE_SIZE);
         buf.put_u32(header.data_length as u32);
         Ok(())
+    }
+}
+
+impl Default for DubboCodec {
+    fn default() -> Self {
+        DubboCodec {
+            state: DecodeState::Head,
+        }
     }
 }
 
@@ -587,7 +621,7 @@ mod tests {
 
         let mut bytes = BytesMut::from(buf.as_slice());
 
-        let mut codec = DubboCodec::new();
+        let mut codec = DubboCodec::default();
         let header = codec.decode_header(&mut bytes).unwrap().unwrap();
         println!("{:?}", header);
         assert!(header.msg_type == MessageType::Request);
@@ -612,7 +646,7 @@ mod tests {
 
         let mut bytes = BytesMut::from(buf.as_slice());
 
-        let mut codec = DubboCodec::new();
+        let mut codec = DubboCodec::default();
         let err = codec.decode_header(&mut bytes);
         assert_eq!(err.is_err(), true);
     }
@@ -648,9 +682,8 @@ mod tests {
         ];
         let mut buf = BytesMut::new();
         buf.put_slice(dubbo_request_raw_bytes);
-        let mut codec = DubboCodec::new();
+        let mut codec = DubboCodec::default();
         let res = codec.decode(&mut buf).unwrap().unwrap();
-        println!("{:?}", res);
 
         let dubbo_request = res.into_request().unwrap();
         assert_eq!(
@@ -661,7 +694,7 @@ mod tests {
 
     #[test]
     fn test_codec_request_roundtrip() {
-        let mut codec = DubboCodec::new();
+        let mut codec = DubboCodec::default();
 
         let header = DubboHeader::default();
         let map = {
