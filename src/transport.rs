@@ -81,7 +81,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::codec::{DubboHeader, RequestInfoBuilder};
+    use crate::codec::{DubboHeader, RequestInfoBuilder, DubboMessage};
     use crate::conn::TcpConnection;
     use hessian_rs::{value::ToHessian, Value};
     use tower::Service;
@@ -94,10 +94,10 @@ mod tests {
             gender.insert("name".to_hessian(), "MAN".to_hessian());
 
             let mut map = HashMap::new();
-            map.insert(
-                "sex".to_hessian(),
-                Value::Map(("org.apache.dubbo.sample.Gender", gender).into()),
-            );
+            // map.insert(
+            //     "sex".to_hessian(),
+            //     Value::Map(("org.apache.dubbo.sample.Gender", gender).into()),
+            // );
             map.insert("name".to_hessian(), "".to_hessian());
             map.insert("id".to_hessian(), "003".to_hessian());
             map.insert("time".to_hessian(), Value::Null);

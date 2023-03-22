@@ -2,6 +2,7 @@
 use crate::constant::{DEFAULT_HEAD_SIZE, DEFAULT_MAX_MESSAGE_SIZE, DUBBO_MAGIC_CODE};
 use crate::error::CodecError;
 
+use std::fmt;
 use std::collections::HashMap;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -37,19 +38,48 @@ pub enum MessageStatus {
     ClientError = 90,
     ServerThreadPoolExhastedError = 100,
 
-    // According to "java dubbo" There are two cases of response:
-    // 		1. with attachments
-    // 		2. no attachments
+    Unknow = 0xff,
+}
+
+// According to "java dubbo" There are two cases of response:
+// 		1. with attachments
+// 		2. no attachments
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum ResponseTypeFlag {
     ResponseWithException = 0,
     ResponseValue = 1,
     ResponseNullValue = 2,
     ResponseWithExceptionWithAttachments = 3,
     ResponseValueWithAttachments = 4,
     ResponseNullValueWithAttachments = 5,
-
-    Unknow = 0xff,
 }
 
+impl ResponseTypeFlag {
+    pub fn has_attachments(&self)->bool {
+        match self {
+            ResponseTypeFlag::ResponseWithExceptionWithAttachments => true,
+            ResponseTypeFlag::ResponseValueWithAttachments => true,
+            ResponseTypeFlag::ResponseNullValueWithAttachments => true,
+            _ => false,
+        }
+    }
+}
+
+impl TryFrom<i32> for ResponseTypeFlag {
+    type Error = CodecError;
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(ResponseTypeFlag::ResponseWithException),
+            1 => Ok(ResponseTypeFlag::ResponseValue),
+            2 => Ok(ResponseTypeFlag::ResponseNullValue),
+            3 => Ok(ResponseTypeFlag::ResponseWithExceptionWithAttachments),
+            4 => Ok(ResponseTypeFlag::ResponseValueWithAttachments),
+            5 => Ok(ResponseTypeFlag::ResponseNullValueWithAttachments),
+            _ => Err(CodecError::InvalidResponseTypeFlag(value)),
+        }
+    }
+}
 #[derive(Debug, Clone, Copy)]
 pub struct DubboHeader {
     // 1 bit Indivate whether the message is request or response
@@ -129,7 +159,7 @@ impl From<RequestInfo> for DubboMessage {
 pub struct ResponseInfo {
     // todo: the object should implement the trait like Into<Common Object>, From<Common Object>
     // the common Object may be protobuf struct or like serde::Serialize and serde::Deserialize
-    result: Option<Value>,
+    body: Value,
     exception: Option<Box<dyn std::error::Error + Send>>,
     attachments: HashMap<String, String>,
 }
@@ -188,6 +218,23 @@ impl From<SerializationType> for Box<dyn Deserializer> {
 }
 
 pub struct Hessian2Serializer;
+
+#[derive(Debug)]
+pub struct DubboException(Value);
+
+impl fmt::Display for DubboException {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "dubbo exception: {}", self.0)
+    }
+}
+
+impl std::error::Error for DubboException {
+    fn description(&self) -> &str {
+        "dubbo exception"
+    }
+}
+
+
 impl Serializer for Hessian2Serializer {
     fn serialize_request(&self, message: &DubboMessage) -> Result<Bytes, CodecError> {
         assert!(message.header.msg_type == MessageType::Request);
@@ -248,21 +295,20 @@ impl Serializer for Hessian2Serializer {
 
         if let Some(ref e) = value.exception {
             ser.serialize_value(
-                &(MessageStatus::ResponseWithExceptionWithAttachments as i32).to_hessian(),
+                &(ResponseTypeFlag::ResponseWithExceptionWithAttachments as i32).to_hessian(),
             )?;
             ser.serialize_value(&e.to_string().to_hessian())?;
             ser.serialize_value(&value.attachments.clone().to_hessian())?;
         } else {
-            if value.result.is_none() {
+            if value.body.is_null() {
                 ser.serialize_value(
-                    &(MessageStatus::ResponseNullValueWithAttachments as i32).to_hessian(),
+                    &(ResponseTypeFlag::ResponseNullValueWithAttachments as i32).to_hessian(),
                 )?;
-                ser.serialize_value(&Value::Null)?;
             } else {
                 ser.serialize_value(
-                    &(MessageStatus::ResponseValueWithAttachments as i32).to_hessian(),
+                    &(ResponseTypeFlag::ResponseValueWithAttachments as i32).to_hessian(),
                 )?;
-                ser.serialize_value(&value.result.clone().unwrap())?;
+                ser.serialize_value(&value.body.clone())?;
             }
 
             ser.serialize_value(&value.attachments.clone().to_hessian())?;
@@ -365,9 +411,62 @@ impl Deserializer for Hessian2Serializer {
         }
     }
 
-    fn deserialize_response(&self, value: BytesMut) -> Result<ResponseInfo, CodecError> {
-        println!("deserialize_response: {:?}", value);
-        todo!()
+    fn deserialize_response(&self, body: BytesMut) -> Result<ResponseInfo, CodecError> {
+        let mut de = hessian_rs::de::Deserializer::new(&body[..]);
+        let rsp_type = match de.read_value()? {
+            Value::Int(rsp_type) => rsp_type,
+            _ => {
+                return Err(CodecError::SerializeError(
+                    "dubbo response type is not int".to_string(),
+                ));
+            }
+        };
+
+        let rsp_type = ResponseTypeFlag::try_from(rsp_type)?;
+        let (body, exception) : (Value, Option<Box<dyn std::error::Error + Send>>) = match rsp_type {
+            ResponseTypeFlag::ResponseValueWithAttachments | ResponseTypeFlag::ResponseValue => {
+                (de.read_value()?, None)
+            },
+            ResponseTypeFlag::ResponseWithExceptionWithAttachments | ResponseTypeFlag::ResponseWithException => {
+                // todo: handle exception
+                (Value::Null, Some(Box::new(DubboException(de.read_value()?))))
+            },
+            ResponseTypeFlag::ResponseNullValueWithAttachments | ResponseTypeFlag::ResponseNullValue => {
+                (Value::Null, None)
+            },
+        };
+        if rsp_type.has_attachments() {
+            match de.read_value()? {
+                Value::Map(attachments) => {
+                    let mut response_attachments = HashMap::with_capacity(attachments.len());
+                    attachments.value().iter().for_each(|(k, v)| {
+                        // ignore non-string key and value
+                        if k.is_str() && v.is_str() {
+                            response_attachments.insert(
+                                k.as_str().unwrap().to_string(),
+                                v.as_str().unwrap().to_string(),
+                            );
+                        }
+                    });
+                    return Ok(ResponseInfo {
+                        body,
+                        exception,
+                        attachments: response_attachments,
+                    });
+                },
+                _ => {
+                    return Err(CodecError::SerializeError(
+                        "dubbo response attachments is not map".to_string(),
+                    ));
+                }
+            };
+        }
+
+        Ok(ResponseInfo {
+            body,
+            exception,
+            attachments: HashMap::new(),
+        })
     }
 }
 

@@ -7,6 +7,7 @@ pub enum CodecError {
     InvalidMagicCode,
     InvalidBody,
     InvalidSerializationType(u8),
+    InvalidResponseTypeFlag(i32),
     InvalidDataLength(usize),
     IoError(std::io::Error),
     SerializeError(String),
@@ -32,6 +33,9 @@ impl fmt::Display for CodecError {
             CodecError::InvalidDataLength(size) => write!(f, "Invalid DataSize {}", size),
             CodecError::InvalidSerializationType(v) => {
                 write!(f, "Invalid Serialization Type {}", v)
+            }
+            CodecError::InvalidResponseTypeFlag(v) => {
+                write!(f, "Invalid Response Type Flag {}", v)
             }
             CodecError::IoError(err) => write!(f, "IoError {}", err),
             CodecError::SerializeError(err) => write!(f, "SerializeError {}", err),
