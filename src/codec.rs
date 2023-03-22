@@ -176,13 +176,16 @@ impl Serializer for Hessian2Serializer {
         ser.serialize_value(&value.service_name.clone().to_hessian())?;
         ser.serialize_value(&value.service_version.clone().to_hessian())?;
         ser.serialize_value(&value.method_name.clone().to_hessian())?;
-        let parameter_type_list = format!("{};", value
-            .method_paramter_type
-            .clone()
-            .into_iter()
-            .map(|k| format!("L{}", k.replace(".", "/")))
-            .collect::<Vec<_>>()
-            .join(";"));
+        let parameter_type_list = format!(
+            "{};",
+            value
+                .method_paramter_type
+                .clone()
+                .into_iter()
+                .map(|k| format!("L{}", k.replace(".", "/")))
+                .collect::<Vec<_>>()
+                .join(";")
+        );
         ser.serialize_value(&parameter_type_list.to_hessian())?;
         for arg in value.method_arguments.iter() {
             ser.serialize_value(&arg)?;
@@ -565,10 +568,10 @@ impl Encoder<DubboMessage> for DubboCodec {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::codec::{DubboCodec, MessageType};
     use bytes::{BufMut, BytesMut};
     use tokio_util::codec::{Decoder, Encoder};
-    use super::*;
     #[test]
     fn test_dubbo_request_header_decode() {
         use bytes::{BufMut, BytesMut};
@@ -707,14 +710,19 @@ mod tests {
         let req = DubboMessage::with_request(header, body);
         let mut dst = BytesMut::new();
         codec.encode(req, &mut dst).unwrap();
-        let codec_res =  codec.decode(&mut dst).unwrap().unwrap();
+        let codec_res = codec.decode(&mut dst).unwrap().unwrap();
         let dubbo_request = codec_res.into_request().unwrap();
 
-        assert_eq!(dubbo_request.service_name, "org.apache.dubbo.sample.UserProvider");
+        assert_eq!(
+            dubbo_request.service_name,
+            "org.apache.dubbo.sample.UserProvider"
+        );
         assert_eq!(dubbo_request.method_name, "GetUser");
         assert_eq!(dubbo_request.version, "1.0.2");
         assert_eq!(dubbo_request.service_version, "");
-        assert_eq!(dubbo_request.method_paramter_type, vec![String::from("org.apache.dubbo.sample.User")]);
-
+        assert_eq!(
+            dubbo_request.method_paramter_type,
+            vec![String::from("org.apache.dubbo.sample.User")]
+        );
     }
 }

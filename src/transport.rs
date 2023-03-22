@@ -1,16 +1,10 @@
 use crate::codec::DubboHeader;
-use crate::codec::RequestInfo;
 use crate::codec::{DubboCodec, DubboMessage, RequestInfoBuilder};
-use crate::error::CodecError;
+use crate::conn::{MakeConnection, TcpConnection};
 use std::collections::HashSet;
-use std::future::Future;
-use std::io;
-use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use std::task::{Context, Poll};
-use tokio::net::TcpStream;
 use tokio_tower::Error;
 use tokio_util::codec::Framed;
 use tower::Service;
@@ -46,53 +40,6 @@ pub type TransportError<T> = Error<MultiplexTransport<FramedIO<T>, CorrelationSt
 
 pub type TransportClient<T> =
     Client<MultiplexTransport<FramedIO<T>, CorrelationStore>, TransportError<T>, DubboMessage>;
-
-/// Helper for defining a "connection" that provides [`AsyncRead`] and [`AsyncWrite`] for
-/// sending messages to Kafka.
-pub trait MakeConnection {
-    /// The connection type.
-    type Connection: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Sized;
-    /// The error that may be produced when connecting.
-    type Error: std::error::Error;
-    /// The future used for awaiting a connection.
-    type Future: Future<Output = Result<Self::Connection, Self::Error>>;
-
-    /// Check whether a connection is ready to be produced.
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>>;
-
-    /// Connect to the connection.
-    fn connect(self) -> Self::Future;
-}
-
-/// A simple TCP connection.
-pub struct TcpConnection {
-    addr: SocketAddr,
-}
-
-impl TcpConnection {
-    /// Create a new connection using the provided socket address.
-    pub fn new(addr: SocketAddr) -> Self {
-        Self { addr }
-    }
-}
-
-impl MakeConnection for TcpConnection {
-    type Connection = TcpStream;
-    type Error = io::Error;
-    type Future =
-        Pin<Box<dyn Future<Output = io::Result<Self::Connection>> + Send + Sync + 'static>>;
-
-    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn connect(self) -> Self::Future {
-        Box::pin(async move {
-            let tcp_stream = TcpStream::connect(self.addr).await?;
-            Ok(tcp_stream)
-        })
-    }
-}
 
 /// Helper for building new clients.
 pub struct MakeClient<C> {
@@ -185,10 +132,7 @@ mod tests {
             .unwrap();
 
         client.ready().await.unwrap();
-        let resp = client
-            .call(build_req())
-            .await
-            .unwrap();
+        let resp = client.call(build_req()).await.unwrap();
         println!("{:?}", resp);
     }
 }
