@@ -83,6 +83,7 @@ mod tests {
     use super::*;
     use crate::codec::{DubboHeader, RequestInfoBuilder, DubboMessage};
     use crate::conn::TcpConnection;
+    use hessian_rs::value::Definition;
     use hessian_rs::{value::ToHessian, Value};
     use tower::Service;
     use tower::ServiceExt;

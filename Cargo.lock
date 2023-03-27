@@ -435,9 +435,9 @@ dependencies = [
 
 [[package]]
 name = "hessian_rs"
-version = "0.0.3"
+version = "0.0.4-rc2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d1ca756dcd50f7a71404440fbe3b259202c8cfea439edb5772ca518e93a522f"
+checksum = "22e3a975a3ccb329ae3036c66e6cb2baed087a2d0762a8d07a047234d667e85d"
 dependencies = [
  "byteorder",
  "indexmap",

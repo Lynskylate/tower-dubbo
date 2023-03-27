@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use derive_builder::Builder;
-use hessian_rs::value::{ToHessian, Value};
+use hessian_rs::value::{ToHessian, Value, Definition};
 use tokio_util::codec::{Decoder, Encoder};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -267,7 +267,28 @@ impl Serializer for Hessian2Serializer {
         );
         ser.serialize_value(&parameter_type_list.to_hessian())?;
         for arg in value.method_arguments.iter() {
-            ser.serialize_value(arg)?;
+            if arg.is_map() {
+                let m = arg.as_map().unwrap();
+                let tp = m.r#type();
+                if tp.is_none() {
+                    panic!("type can't be none");
+                }
+                let mut fields = Vec::new();
+                let mut field_keys = Vec::new();
+                for (k, v) in m.iter() {
+                    if k.is_str() {
+                        let k = k.as_str().unwrap();
+                        field_keys.push(k.to_string());
+                        fields.push(v.clone());
+                    } else {
+                        panic!("key can't be not string");
+                    }
+                }
+                ser.serialize_fields_with_definition(&Definition{name: tp.unwrap().to_string(), fields: field_keys}, &fields  )?;
+
+            } else {
+                ser.serialize_value(arg)?;
+            }
         }
         ser.serialize_value(&value.attachments.clone().to_hessian())?;
 
