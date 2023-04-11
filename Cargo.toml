@@ -21,3 +21,6 @@ hdrhistogram = "7"
 tokio-util = { version = "0.7", features = ["codec", "compat"] }
 hessian_rs = "0.0.4-rc2"
 
+[[example]]
+name="tower_builder"
+path="examples/tower_builder.rs"
