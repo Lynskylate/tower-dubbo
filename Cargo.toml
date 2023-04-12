@@ -22,9 +22,9 @@ tokio-util = { version = "0.7", features = ["codec", "compat"] }
 hessian_rs = "0.0.4-rc2"
 
 [[example]]
-name="tower_builder"
+name="consumer"
 path= "examples/consumer.rs"
 
 [[example]]
-name="tower_builder"
+name="provider"
 path= "examples/provider.rs"
