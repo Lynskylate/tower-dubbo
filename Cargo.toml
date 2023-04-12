@@ -23,8 +23,8 @@ hessian_rs = "0.0.4-rc2"
 
 [[example]]
 name="tower_builder"
-path= "examples/consumer_builder.rs"
+path= "examples/consumer.rs"
 
 [[example]]
 name="tower_builder"
-path= "examples/provider_builder.rs"
+path= "examples/provider.rs"
